@@ -1,15 +1,17 @@
 from bs4 import BeautifulSoup
 import requests
-import csv
-import psycopg2
 import psycopg2
 from psycopg2 import Error
 from queue import Queue
+import os
+from argparse import ArgumentParser
+from threading import Thread
+import unidecode
+
 
 class PoemScraper:
-    def __init__(self, start, end):
+    def __init__(self,url_file, start, end):
         """
-
         :param start: Bound of user id
         :param end: Bound of user id
         """
@@ -28,11 +30,20 @@ class PoemScraper:
             'port': '5432',
             'database': 'poem'
         }
+        # Connect to database
+        try:
+            self.connection = psycopg2.connect(user=self.db_infor['user'], password=self.db_infor['password'],
+                                           host=self.db_infor['host'], port=self.db_infor['port'],
+                                           database=self.db_infor['database'])
+        except (Exception, Error) as error:
+            print("Error while connecting to PostGreSql", error)
 
         self.ids = Queue(maxsize=0)
+        # put id to Queue
+        for id in self.get_idxs(os.path.join(url_file), start, end):
+            self.ids.put(id)
 
         self.contents = Queue(maxsize=0)
-
 
     def get_idxs(self, filename, start, end):
         """
@@ -49,42 +60,90 @@ class PoemScraper:
 
         return res
 
-
-    def fetch(self):
+    def fetch(self, thread):
         """
         Fetch all poems of a member.
         """
+        # get first element in queue
+        while not self.ids.empty():
 
-        id = self.ids.get()
-        base_url = self.url(id)
+            id = self.ids.get()
+            base_url = self.url(id)
 
-        page = requests.get(base_url, headers=self.header)
-        soup = BeautifulSoup(page.text, 'html.parser')
+            page = requests.get(base_url, headers=self.header)
+            soup = BeautifulSoup(page.text, 'html.parser')
 
-        container = soup.find_all('table', class_='table table-condensed table-fuction table-athor')
-        if len(container) != 0:
-            information = container[0].find_all('b')
-            num_poems = [int(s) for s in str(information[0]).split(" ") if s.isdigit()]
+            container = soup.find_all('table', class_='table table-condensed table-fuction table-athor')
+            if len(container) != 0:
+                information = container[0].find_all('b')
+                num_poems = [int(s) for s in str(information[0]).split(" ") if s.isdigit()]
 
-        # Maximum poems of 1 page is 10
-        num_pages = int(num_poems/10)
+            author = soup.find('strong', class_='strong-name-author')
+            author = (author.contents[0]).strip()
+            author = author.lower()
+            author = unidecode.unidecode(author)
+            author = author.replace(" ", "_")
+            #print(author)
 
-        for i in range(num_pages):
-            page_id = "2-{}.html".format(i+1)
-            page_url = base_url + page_id
+            # Maximum poems of 1 page is 10
+            num_pages = int(num_poems[0]/10)
 
-            response = requests.get(url=page_url, headers=self.header)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            for i in range(num_pages):
+                page_id = "/2-{}.html".format(i+1)
+                page_url = base_url + author + page_id
 
-            container = soup.find_all('td', class_='td_poem_items')
-            for c in container:
-                poem_link = self.header['Origin'] + c.find('a', href=True)['href']
+                # print(page_url)
 
-                response = requests.get(url=poem_link, header=self.header)
+                response = requests.get(url=page_url, headers=self.header)
                 soup = BeautifulSoup(response.text, 'html.parser')
 
-                content = soup.find('div', class_='col-md-12 wrapper-content-poem')
+                container = soup.find_all('td', class_='td-poem-items')
+                count = 1
+                for c in container:
+                    print("Thread {} process: poem {}, page {}, id {}".format(thread, count, i + 1, id))
+                    poem_link = self.header['Origin'] + c.find('a', href=True)['href']
 
+                    response = requests.get(url=poem_link, headers=self.header)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+
+                    container = soup.find_all('div', class_='col-md-12')
+
+                    for c in container:
+                        if c['class'] == ['col-md-12']:
+                            element = BeautifulSoup(str(c), 'html.parser')
+                            if element.find_all('br') != []:
+                                if c.contents[0] != '\n' or c.contents[-1] != '\n':
+                                    self.contents.put([str(c.contents), str(poem_link)])
+                                    break
+
+                    count += 1
+                    # print("Put done")
+
+            self.ids.task_done()
+
+
+        print("-----------------Thread {} Done-----------------".format(thread))
+
+    def store_content(self):
+        try:
+            while True:
+                content = self.contents.get(timeout=600)
+                cursor = self.connection.cursor()
+                query = """INSERT INTO poems2(content, url) VALUES(%s, %s)"""
+
+                # Execute query
+                cursor.execute(query, (content[0], content[1]))
+                self.connection.commit()
+
+                # Close transaction session
+                cursor.close()
+                self.contents.task_done()
+                print("Store content")
+
+        except Exception as e:
+            print(e)
+            print("Store Content Of Page Done!!!!!!!")
+            self.connection.close()
 
 
     def list_id(self, start, end):
@@ -113,46 +172,28 @@ class PoemScraper:
 
         return ids, num_poems
 
+
 if __name__ == '__main__':
 
-    """
-    scraper = PoemScraper()
+    parser = ArgumentParser()
+    parser.add_argument("-num_thread", "--num_thread", default=32, type=int)
+    parser.add_argument("-start", "--start", default=10000, type=int)
+    parser.add_argument("-end", "--end", default=17000, type=int)
 
-    ids, num_poems = scraper.list_id(start=10000, end=16600)
-    print("Total poems: {}".format(num_poems))
+    args = parser.parse_args()
 
-    f = open('url_of_user.csv', 'w')
-    writer = csv.writer(f)
-    for id in ids:
-        writer.writerow([scraper.url(id)])
-    """
+    scraper = PoemScraper('url_of_user.csv', start=args.start, end=args.end)
+    num_threads = args.num_thread
 
+    for i in range(num_threads):
+        worker = Thread(target=scraper.fetch, args=(i+1, ))
+        worker.start()
 
-    try:
-        # Connect to an existing database
-        connection = psycopg2.connect(user="pvhanh",
-                                      password="pvhanh",
-                                      host="118.70.82.134",
-                                      port="5432",
-                                      database="poem")
+    store_worker1 = Thread(target=scraper.store_content)
+    store_worker1.start()
 
-        # Create a cursor to perform database operations
-        cursor = connection.cursor()
-        # Print PostgreSQL details
-        print("PostgreSQL server information")
-        print(connection.get_dsn_parameters(), "\n")
-        # Executing a SQL query
-        cursor.execute("SELECT version();")
-        # Fetch result
-        record = cursor.fetchone()
-        print("You are connected to - ", record, "\n")
+    store_worker2 = Thread(target=scraper.store_content)
+    store_worker2.start()
 
-    except (Exception, Error) as error:
-        print("Error while connecting to PostgreSQL", error)
-    finally:
-        if (connection):
-            cursor.close()
-            connection.close()
-            print("PostgreSQL connection is closed")
 
 
