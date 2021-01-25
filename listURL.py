@@ -75,13 +75,13 @@ class GoogleSpider(object):
 
 
 if __name__ == '__main__':
-    f = open('./tet.csv', 'a+')
+    f = open('./mua_xuan.csv', 'a+')
     urls= list()
     writer = csv.DictWriter(f, fieldnames=['url'])
 
 
-    for query in ['thơ tết','thơ tết nguyên đán', 'thơ chúc tết', 'thơ chúc năm mới', 'thơ tết kỷ hợi','thơ tết canh tý', 'thơ tết']:
-        for page in range(0, 10):
+    for query in ['thơ về mùa xuân', 'những bài thơ mùa xuân', 'thơ hay về mùa xuân','thơ chúc tết']:
+        for page in range(0, 9):
             print("query:", query)
             print(page)
             result = GoogleSpider().search(query , start=page)

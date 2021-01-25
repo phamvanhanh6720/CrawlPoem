@@ -86,7 +86,7 @@ class PoemScraper:
             #print(author)
 
             # Maximum poems of 1 page is 10
-            num_pages = int(num_poems[0]/10)
+            num_pages = int(num_poems[0]/10) + 1
 
             for i in range(num_pages):
                 page_id = "/2-{}.html".format(i+1)
@@ -171,6 +171,17 @@ class PoemScraper:
             return ids, num_poems
 
         return ids, num_poems
+
+    def process_raw(self):
+        cursor = self.connection.cursor()
+        sql = "SELECT * FROM poems2"
+
+        # Execute sql
+        cursor.execute(sql)
+
+        record = cursor.fetchmany(1)
+        while record != []:
+            pass
 
 
 if __name__ == '__main__':
