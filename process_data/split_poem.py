@@ -2,6 +2,7 @@ import json
 import os
 import numpy as np
 
+
 def split_poem(poem:str, poem_size:int):
     result = list()
     poem = poem.strip(' ')
